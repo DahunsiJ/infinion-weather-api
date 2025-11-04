@@ -1,12 +1,16 @@
-name: CI-CD to ACR & AKS
+name: CI/CD (split jobs, DevSecOps)
 
 on:
   push:
+    branches: [ main ]
+  pull_request:
     branches: [ main ]
 
 env:
   IMAGE_NAME: infinion-weather-api
   IMAGE_TAG: ${{ github.sha }}
+  DOCKERFILE_PATH: ./Dockerfile
+  K8S_MANIFEST: k8s/deployment.yaml
 
 permissions:
   contents: read
@@ -14,7 +18,36 @@ permissions:
   packages: write
 
 jobs:
-  build-and-deploy:
+  # -------------------------
+  # 1. Checkout + Restore Cache
+  # -------------------------
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      dotnet-cache-key: ${{ steps.cache-dotnet.outputs.cache-hit }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '7.0.x'
+
+      - name: Cache NuGet packages
+        id: cache-dotnet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+
+  # -------------------------
+  # 2. Unit tests (fast)
+  # -------------------------
+  tests:
+    needs: [prep]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,32 +58,38 @@ jobs:
         with:
           dotnet-version: '7.0.x'
 
-      - name: Restore & Build & Test
+      - name: Restore & Build
         run: |
           dotnet restore
           dotnet build --configuration Release --no-restore
-          dotnet test --no-build --verbosity normal || true   # do not block on tests in assessment; change if desired
 
-      - name: SonarScanner analysis (optional)
-        if: secrets.SONAR_TOKEN != ''
-        uses: sonarsource/sonarcloud-github-action@v2
-        with:
-          args: >
-            -Dsonar.projectKey=infinion-weather
-            -Dsonar.organization=your-org-if-any
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      - name: Run Unit Tests
+        run: |
+          dotnet test --no-build --verbosity normal
 
-      - name: Set up QEMU and Buildx (multi-platform build support)
+  # -------------------------
+  # 3. Build & push image (build job pushes to ACR)
+  #    - Has ACR credentials (minimal scope)
+  # -------------------------
+  build-and-push:
+    needs: [prep, tests]
+    runs-on: ubuntu-latest
+    outputs:
+      image-ref: ${{ steps.set-image.outputs.image-ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU and Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Cache Docker layers
+      - name: Cache buildx
         uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
-          key: buildx-${{ github.sha }}
+          key: buildx-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
-            buildx-
+            buildx-${{ runner.os }}-
 
       - name: Login to ACR (Docker)
         uses: azure/docker-login@v1
@@ -59,26 +98,55 @@ jobs:
           username: ${{ secrets.AZURE_CLIENT_ID }}
           password: ${{ secrets.AZURE_CLIENT_SECRET }}
 
-      - name: Build and push (multi-stage) Docker image
+      - name: Build and push Docker image
+        id: build-image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
+          file: ${{ env.DOCKERFILE_PATH }}
           push: true
-          platforms: linux/amd64
           tags: |
             ${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
             ${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache
 
+      - name: Set image output
+        id: set-image
+        run: |
+          echo "image-ref=${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" >> $GITHUB_OUTPUT
+
+  # -------------------------
+  # 4. Trivy Image Scan (runs AFTER image is pushed)
+  # -------------------------
+  image-scan:
+    needs: [build-and-push]
+    runs-on: ubuntu-latest
+    steps:
       - name: Trivy image scan (fail on HIGH/CRITICAL)
         uses: aquasecurity/trivy-action@v0.6.0
         with:
-          image-ref: ${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          image-ref: ${{ needs.build-and-push.outputs.image-ref }}
           format: 'table'
           exit-code: '1'
           vuln-type: 'os,library'
+
+      - name: Upload Trivy report as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-report.txt
+
+  # -------------------------
+  # 5. Deploy to AKS (only if scans passed)
+  # -------------------------
+  deploy:
+    needs: [image-scan, tests]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Azure Login
         uses: azure/login@v1
@@ -94,15 +162,26 @@ jobs:
           resource-group: ${{ secrets.RESOURCE_GROUP }}
           cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
 
-      - name: Update k8s deployment image (replace placeholder)
+      - name: Replace image placeholder in manifest
         run: |
-          IMAGE=${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          sed -i "s|IMAGE_PLACEHOLDER|${IMAGE}|g" k8s/deployment.yaml
-          cat k8s/deployment.yaml
+          IMAGE=${{ needs.build-and-push.outputs.image-ref }}
+          sed -i "s|IMAGE_PLACEHOLDER|${IMAGE}|g" ${{ env.K8S_MANIFEST }}
+          cat ${{ env.K8S_MANIFEST }}
 
-      - name: Deploy to AKS
+      - name: Deploy manifests
         run: |
           kubectl apply -f k8s/namespace.yaml || true
           kubectl apply -f k8s/deployment.yaml
           kubectl apply -f k8s/service.yaml
-          kubectl rollout status deployment/infinion-weather-api --timeout=120s
+          kubectl rollout status deployment/infinion-weather-api --timeout=180s
+
+  # -------------------------
+  # 6. Notify or cleanup (optional)
+  # -------------------------
+  notify:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    if: ${{ success() }}
+    steps:
+      - name: Post success message
+        run: echo "Deployment to AKS succeeded: ${{ needs.build-and-push.outputs.image-ref }}"
