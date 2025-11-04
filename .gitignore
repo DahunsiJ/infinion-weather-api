@@ -1,0 +1,41 @@
+# Visual Studio / Rider / VSCode
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build outputs
+bin/
+obj/
+publish/
+artifacts/
+
+# Terraform
+terraform.tfstate
+terraform.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+backups/
+
+# Docker
+**/Dockerfile*
+**/.dockerignore
+*.tar
+docker-compose.override.yml
+
+# Secrets / local keys
+.env
+.env*
+*.pem
+*.key
+.ssh/
+*.pfx
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

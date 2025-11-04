@@ -1,0 +1,35 @@
+name: Security Scans (PR)
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  scans:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@v0.6.0
+        with:
+          scan-type: filesystem
+          path: .
+          format: 'table'
+          exit-code: '0'  # warn-only for PR scans
+
+      - name: Build docker image for local scan
+        run: docker build -t temp-scan-image:pr-${{ github.event.number }} .
+
+      - name: Trivy image scan (on built image)
+        run: docker save temp-scan-image:pr-${{ github.event.number }} | trivy image --input - --exit-code 0 --format table
+
+      - name: Sonar (if SONAR_TOKEN)
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then
+            ./scripts/sonar-scan.sh
+          else
+            echo "SONAR_TOKEN not set — skipping Sonar scan"
+          fi

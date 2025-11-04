@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: infinion-weather-api
+  labels:
+    app: infinion-weather-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: infinion-weather-api
+  template:
+    metadata:
+      labels:
+        app: infinion-weather-api
+    spec:
+      # Best practice: do not run as root
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+
+      containers:
+        - name: infinion-weather-api
+          # CI will replace IMAGE_PLACEHOLDER with the image name before apply
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5167
+          livenessProbe:
+            httpGet:
+              path: /weatherforecast
+              port: 5167
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /weatherforecast
+              port: 5167
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+      # ServiceAccount / imagePullSecrets removed because AKS + ACR integration is set via role assignment
+      # Add nodeSelector / tolerations if you use special nodes

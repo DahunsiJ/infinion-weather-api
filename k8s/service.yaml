@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: infinion-weather-api
+spec:
+  selector:
+    app: infinion-weather-api
+  ports:
+    - port: 80
+      targetPort: 5167
+      protocol: TCP
+      name: http
+  type: ClusterIP
+
+
+# # For external test (only if you want LB public IP)
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: infinion-weather-api-lb
+# spec:
+#   selector:
+#     app: infinion-weather-api
+#   ports:
+#     - port: 80
+#       targetPort: 5167
+#       protocol: TCP
+#   type: LoadBalancer
