@@ -257,18 +257,23 @@ jobs:
           resource-group: ${{ secrets.RESOURCE_GROUP }}
           cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
 
-      - name: Replace image placeholder and namespace in manifest
+      - name: Replace image placeholder and ensure namespace
         run: |
           IMAGE=${{ env.IMAGE_TO_DEPLOY }}
           NAMESPACE="infinion-weather-api"
-          echo "Updating manifest with image: ${IMAGE} and namespace: ${NAMESPACE}"
+
+          echo "Replacing image and ensuring namespace in ${K8S_MANIFEST_PATH}"
+
+          # Replace IMAGE_PLACEHOLDER with actual image
           sed -i "s|IMAGE_PLACEHOLDER|${IMAGE}|g" "${K8S_MANIFEST_PATH}"
-          # ensure namespace line exists or is replaced
-          if grep -q '^  namespace:' "${K8S_MANIFEST_PATH}"; then
-            sed -i "s|^  namespace:.*|  namespace: ${NAMESPACE}|g" "${K8S_MANIFEST_PATH}"
+
+          # If namespace already exists, update it; otherwise, inject it properly under metadata:
+          if grep -q "namespace:" "${K8S_MANIFEST_PATH}"; then
+            sed -i "s|namespace:.*|namespace: ${NAMESPACE}|g" "${K8S_MANIFEST_PATH}"
           else
-            sed -i "0,/^metadata:/a\  namespace: ${NAMESPACE}" "${K8S_MANIFEST_PATH}"
+            awk -v ns="${NAMESPACE}" '/^metadata:/{print;print "  namespace: "ns;next}1' "${K8S_MANIFEST_PATH}" > tmp.yaml && mv tmp.yaml "${K8S_MANIFEST_PATH}"
           fi
+
           echo "----- FINAL DEPLOYMENT YAML -----"
           cat "${K8S_MANIFEST_PATH}"
 
@@ -278,6 +283,7 @@ jobs:
           kubectl apply -f k8s/deployment.yaml
           kubectl apply -f k8s/service.yaml
           kubectl rollout status deployment/infinion-weather-api --timeout=180s
+
 
 
   notify:
