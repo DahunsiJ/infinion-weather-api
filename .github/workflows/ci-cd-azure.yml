@@ -49,31 +49,36 @@ jobs:
     needs:
       - prep
     runs-on: ubuntu-latest
+    # copy the secret into an env var and reference env.* in if conditions
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_ORGANIZATION: ${{ secrets.SONAR_ORGANIZATION }}
+      SONAR_PROJECT_KEY: ${{ secrets.SONAR_PROJECT_KEY }}
     steps:
       - name: Skip Sonar step if SONAR_TOKEN not set
-        if: ${{ secrets.SONAR_TOKEN == '' }}
+        if: env.SONAR_TOKEN == ''
         run: |
           echo "SONAR_TOKEN not provided. Skipping SonarCloud analysis."
 
       - name: Checkout (for Sonar)
-        if: ${{ secrets.SONAR_TOKEN != '' }}
+        if: env.SONAR_TOKEN != ''
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Setup .NET (for Sonar)
-        if: ${{ secrets.SONAR_TOKEN != '' }}
+        if: env.SONAR_TOKEN != ''
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '7.0.x'
 
       - name: SonarCloud Scan
-        if: ${{ secrets.SONAR_TOKEN != '' }}
+        if: env.SONAR_TOKEN != ''
         uses: sonarsource/sonarcloud-github-action@v1
         with:
-          organization: ${{ secrets.SONAR_ORGANIZATION }}
-          projectKey: ${{ secrets.SONAR_PROJECT_KEY }}
-          token: ${{ secrets.SONAR_TOKEN }}
+          organization: ${{ env.SONAR_ORGANIZATION }}
+          projectKey: ${{ env.SONAR_PROJECT_KEY }}
+          token: ${{ env.SONAR_TOKEN }}
 
   tests:
     name: Unit tests
@@ -124,7 +129,7 @@ jobs:
     needs:
       - prep
       - tests
-      - sonar   # optional dependency: sonar job exists; its steps will skip if token absent
+      - sonar   # sonar job exists; its steps will be skipped if token not present
     runs-on: ubuntu-latest
     outputs:
       image-ref: ${{ steps.set-image.outputs.image-ref }}
@@ -170,9 +175,6 @@ jobs:
           IMAGE_REF="${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
           echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
 
-      # --------------------
-      # Generate SBOM (Anchore SBOM Action) + upload
-      # --------------------
       - name: Generate SBOM (Anchore SBOM Action)
         uses: anchore/sbom-action@v0
         with:
