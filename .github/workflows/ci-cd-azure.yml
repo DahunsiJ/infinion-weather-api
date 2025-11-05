@@ -45,7 +45,7 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
 
   sonar:
-    name: SonarCloud analysis (optional)
+    name: SonarCloud analysis
     needs:
       - prep
     runs-on: ubuntu-latest
