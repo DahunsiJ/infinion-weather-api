@@ -90,10 +90,11 @@ jobs:
       - tests
     runs-on: ubuntu-latest
     steps:
-      - name: Check Sonar token exists
+      - name: Validate Sonar secrets
         run: |
-          if [ -z "${{ secrets.SONAR_TOKEN }}" ]; then
-            echo "SONAR_TOKEN not set — skipping SonarCloud analysis."
+          # If any required Sonar secret is missing, skip Sonar gracefully.
+          if [ -z "${{ secrets.SONAR_TOKEN }}" ] || [ -z "${{ secrets.SONAR_ORGANIZATION }}" ] || [ -z "${{ secrets.SONAR_PROJECT_KEY }}" ]; then
+            echo "SONAR_TOKEN, SONAR_ORGANIZATION or SONAR_PROJECT_KEY is not set. Skipping SonarCloud analysis."
             exit 0
           fi
 
@@ -102,13 +103,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Java 17 (required by SonarScanner)
+      - name: Setup Java 17 (SonarScanner requires modern Java)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup .NET
+      - name: Setup .NET (for C# analysis)
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '7.0.x'
@@ -116,7 +117,7 @@ jobs:
       - name: Run SonarCloud scanner
         uses: sonarsource/sonarcloud-github-action@v1
         with:
-          # pass sonar properties through args to avoid linter/editor invalid-input issues
+          # pass properties via args to avoid editor input validation issues
           args: >
             -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
@@ -174,7 +175,7 @@ jobs:
           IMAGE_REF="${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
           echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
 
-      - name: Generate SBOM with Syft (via docker)
+      - name: Generate SBOM with Syft (docker image)
         run: |
           IMAGE=${{ steps.set-image.outputs.image-ref }}
           echo "Generating SBOM for $IMAGE"
