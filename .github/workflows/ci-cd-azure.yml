@@ -44,6 +44,30 @@ jobs:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
 
+  sonar:
+    name: SonarCloud analysis (optional)
+    needs:
+      - prep
+    runs-on: ubuntu-latest
+    if: ${{ secrets.SONAR_TOKEN != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '7.0.x'
+
+      - name: SonarCloud Scan
+        uses: sonarsource/sonarcloud-github-action@v1
+        with:
+          organization: ${{ secrets.SONAR_ORGANIZATION }}
+          projectKey: ${{ secrets.SONAR_PROJECT_KEY }}
+          token: ${{ secrets.SONAR_TOKEN }}
+
   tests:
     name: Unit tests
     needs:
@@ -93,6 +117,7 @@ jobs:
     needs:
       - prep
       - tests
+      - sonar   # optional dependency: sonar will run only if SONAR_TOKEN secret exists
     runs-on: ubuntu-latest
     outputs:
       image-ref: ${{ steps.set-image.outputs.image-ref }}
@@ -139,12 +164,11 @@ jobs:
           echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
 
       # --------------------
-      # Generate SBOM (Syft) and upload as artifact
+      # Generate SBOM (Anchore SBOM Action) + upload
       # --------------------
-      - name: Generate SBOM with Syft
-        uses: anchore/syft-action@v0.8.0
+      - name: Generate SBOM (Anchore SBOM Action)
+        uses: anchore/sbom-action@v0
         with:
-          image: ${{ steps.set-image.outputs.image-ref }}
           output: sbom.json
 
       - name: Upload SBOM artifact
@@ -161,7 +185,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trivy image scan (fail on HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@v0.6.0
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: ${{ needs.build-and-push.outputs.image-ref }}
           format: 'table'
@@ -173,7 +197,6 @@ jobs:
         run: |
           echo "Saving trivy JSON report to trivy-report.json"
           docker run --rm -v "${{ github.workspace }}":/workdir aquasecurity/trivy:latest image --format json --output /workdir/trivy-report.json ${{ needs.build-and-push.outputs.image-ref }}
-        # capture the exit code separately so artifacts can still upload
         continue-on-error: true
 
       - name: Upload Trivy report as artifact
