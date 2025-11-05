@@ -239,9 +239,10 @@ jobs:
     needs: [image-scan, tests, build-and-push]
     runs-on: ubuntu-latest
     environment: production
+    # >>> Removed invalid job-level expression that referenced env.* (that caused the workflow to be invalid)
+    # Keep other job-level envs if needed — do not reference env.* inside expressions here.
     env:
-      IMAGE_TO_DEPLOY: ${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-      K8S_MANIFEST_PATH: k8s/deployment.yaml  
+      K8S_MANIFEST_PATH: k8s/deployment.yaml
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -259,13 +260,17 @@ jobs:
 
       - name: Replace image placeholder and ensure namespace
         run: |
-          IMAGE=${{ env.IMAGE_TO_DEPLOY }}
+          # Build the full image name at runtime (safe — secrets expanded, runner env used for IMAGE_NAME & GITHUB_SHA)
+          IMAGE="${{ secrets.ACR_NAME }}.azurecr.io/${IMAGE_NAME}:${GITHUB_SHA}"
           NAMESPACE="infinion-weather-api"
 
           echo "Replacing image and ensuring namespace in ${K8S_MANIFEST_PATH}"
+          echo "Using image: ${IMAGE}"
 
+          # Replace IMAGE_PLACEHOLDER with actual image
           sed -i "s|IMAGE_PLACEHOLDER|${IMAGE}|g" "${K8S_MANIFEST_PATH}"
 
+          # If namespace already exists, update it; otherwise, inject it properly under metadata:
           if grep -q "namespace:" "${K8S_MANIFEST_PATH}"; then
             sed -i "s|namespace:.*|namespace: ${NAMESPACE}|g" "${K8S_MANIFEST_PATH}"
           else
@@ -276,17 +281,16 @@ jobs:
           cat "${K8S_MANIFEST_PATH}"
 
       - name: Deploy manifests to AKS
-        env:
-          IMAGE_TO_DEPLOY: ${{ env.IMAGE_TO_DEPLOY }}
         run: |
           set -e
-          IMAGE="${IMAGE_TO_DEPLOY}"
+          # Recompute IMAGE here the same way for clarity / debug logs
+          IMAGE="${{ secrets.ACR_NAME }}.azurecr.io/${IMAGE_NAME}:${GITHUB_SHA}"
           NAMESPACE="infinion-weather-api"
 
           echo "Deploying image: ${IMAGE}"
 
           if [ -z "${IMAGE}" ]; then
-            echo "❌ ERROR: IMAGE_TO_DEPLOY is empty! Aborting deployment."
+            echo "❌ ERROR: IMAGE is empty! Aborting deployment."
             exit 1
           fi
 
