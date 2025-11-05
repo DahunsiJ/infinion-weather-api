@@ -2,16 +2,15 @@
 ###############################################################################
 # Stage 0: build - restore & publish the app
 ###############################################################################
-FROM mcr.microsoft.com/dotnet/sdk:7.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
 # Copy only solution & project files first to leverage docker layer cache
 COPY *.sln ./
 COPY *.csproj ./
-# Copy everything else (since your source files are in the repo root)
 COPY . ./
 
-# Explicitly restore this specific project
+# Explicitly restore this project
 RUN dotnet restore "InfinionDevOps.csproj" --disable-parallel
 
 # Build & publish (trim to reduce size; no single-file for easier debugging)
@@ -22,7 +21,7 @@ RUN dotnet publish "InfinionDevOps.csproj" -c Release -o /app/publish --no-resto
 ###############################################################################
 # Stage 1: runtime - smaller image, non-root user, trimmed runtime
 ###############################################################################
-FROM mcr.microsoft.com/dotnet/aspnet:7.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 
 # Create non-root user and dedicated app directory
 RUN useradd -u 1001 -m appuser \
