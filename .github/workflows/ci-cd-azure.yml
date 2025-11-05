@@ -103,7 +103,7 @@ jobs:
       - name: Set up QEMU and Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Cache buildx
+      - name: Cache buildx (GitHub Actions cache backend)
         uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
@@ -128,13 +128,31 @@ jobs:
           tags: |
             ${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
             ${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache
+          # Use GitHub Actions cache backend to avoid docker driver cache export errors
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Set image output
         id: set-image
         run: |
-          echo "image-ref=${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" >> $GITHUB_OUTPUT
+          IMAGE_REF="${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+          echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
+
+      # --------------------
+      # Generate SBOM (Syft) and upload as artifact
+      # --------------------
+      - name: Generate SBOM with Syft
+        uses: anchore/syft-action@v0.8.0
+        with:
+          image: ${{ steps.set-image.outputs.image-ref }}
+          output: sbom.json
+
+      - name: Upload SBOM artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
 
   image-scan:
     name: Trivy image scan
@@ -143,20 +161,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trivy image scan (fail on HIGH/CRITICAL)
-        # if your editor complains about this action, update the tag or ignore; GitHub will resolve it at runtime
         uses: aquasecurity/trivy-action@v0.6.0
         with:
           image-ref: ${{ needs.build-and-push.outputs.image-ref }}
           format: 'table'
-          exit-code: '1'
+          exit-code: '1'     # fail when HIGH or CRITICAL
           vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Persist Trivy JSON report (docker-run)
+        run: |
+          echo "Saving trivy JSON report to trivy-report.json"
+          docker run --rm -v "${{ github.workspace }}":/workdir aquasecurity/trivy:latest image --format json --output /workdir/trivy-report.json ${{ needs.build-and-push.outputs.image-ref }}
+        # capture the exit code separately so artifacts can still upload
+        continue-on-error: true
 
       - name: Upload Trivy report as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: trivy-report
-          path: trivy-report.txt
+          path: trivy-report.json
 
   deploy:
     name: Deploy to AKS
@@ -166,7 +191,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     env:
-      # Avoid referencing workflow-level env via an expression here (keeps editor/linter calm)
       IMAGE_TO_DEPLOY: ${{ needs.build-and-push.outputs.image-ref }}
       K8S_MANIFEST_PATH: k8s/deployment.yaml
     steps:
