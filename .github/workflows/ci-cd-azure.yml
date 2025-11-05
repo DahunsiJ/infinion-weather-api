@@ -44,48 +44,6 @@ jobs:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
 
-  sonar:
-    name: SonarCloud analysis (optional)
-    needs:
-      - prep
-    runs-on: ubuntu-latest
-    # We don't rely on job-level expression using secrets (to avoid linter/validation issues).
-    # Instead, the first step will abort cleanly if SONAR_TOKEN is not set.
-    steps:
-      - name: Check Sonar token exists
-        run: |
-          if [ -z "${{ secrets.SONAR_TOKEN }}" ]; then
-            echo "SONAR_TOKEN not set — skipping SonarCloud analysis."
-            exit 0
-          fi
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Java 17 (required by newer SonarScanner)
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '7.0.x'
-
-      - name: Run SonarCloud scanner
-        # Use the sonarsource action; pass scanner properties via args
-        uses: sonarsource/sonarcloud-github-action@v1
-        with:
-          # sonar action accepts 'args' (pass org/project/login via -D properties).
-          args: >
-            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
-            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
-            -Dsonar.host.url=https://sonarcloud.io
-
   tests:
     name: Unit tests
     needs:
@@ -126,12 +84,51 @@ jobs:
             dotnet test "$proj" --no-build --verbosity normal
           done
 
+  sonar:
+    name: SonarCloud analysis
+    needs:
+      - tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Sonar token exists
+        run: |
+          if [ -z "${{ secrets.SONAR_TOKEN }}" ]; then
+            echo "SONAR_TOKEN not set — skipping SonarCloud analysis."
+            exit 0
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java 17 (required by SonarScanner)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '7.0.x'
+
+      - name: Run SonarCloud scanner
+        uses: sonarsource/sonarcloud-github-action@v1
+        with:
+          # pass sonar properties through args to avoid linter/editor invalid-input issues
+          args: >
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            -Dsonar.host.url=https://sonarcloud.io
+
   build-and-push:
     name: Build & push image
     needs:
       - prep
       - tests
-      - sonar   # sonar is optional — it will have exited early if token missing
+      - sonar
     runs-on: ubuntu-latest
     outputs:
       image-ref: ${{ steps.set-image.outputs.image-ref }}
@@ -178,7 +175,6 @@ jobs:
           echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
 
       - name: Generate SBOM with Syft (via docker)
-        # syft is run as a container to produce SBOM for the pushed image
         run: |
           IMAGE=${{ steps.set-image.outputs.image-ref }}
           echo "Generating SBOM for $IMAGE"
