@@ -278,11 +278,33 @@ jobs:
           cat "${K8S_MANIFEST_PATH}"
 
       - name: Deploy manifests to AKS
+        env:
+          IMAGE_TO_DEPLOY: ${{ env.IMAGE_TO_DEPLOY }}
         run: |
+          set -e
+          IMAGE="${IMAGE_TO_DEPLOY}"
+          NAMESPACE="infinion-weather-api"
+
+          echo "Deploying image: ${IMAGE}"
+
+          if [ -z "${IMAGE}" ]; then
+            echo "❌ ERROR: IMAGE_TO_DEPLOY is empty! Aborting deployment."
+            exit 1
+          fi
+
+          echo "✅ Confirming manifest has correct image..."
+          grep "image:" k8s/deployment.yaml || (echo "❌ Image field missing in manifest!" && exit 1)
+          echo "--------------------------------------"
+
+          echo "Applying Kubernetes manifests..."
           kubectl apply -f k8s/namespace.yaml || true
           kubectl apply -f k8s/deployment.yaml
           kubectl apply -f k8s/service.yaml
-          kubectl rollout status deployment/infinion-weather-api --timeout=180s
+
+          echo "⏳ Waiting for rollout..."
+          kubectl rollout status deployment/infinion-weather-api -n ${NAMESPACE} --timeout=180s
+          echo "✅ Deployment complete."
+
 
 
 
