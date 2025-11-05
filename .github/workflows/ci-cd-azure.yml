@@ -218,7 +218,7 @@ jobs:
     steps:
       - name: Run Trivy image scan (fail on HIGH/CRITICAL)
         run: |
-          IMAGE=${{ needs.build-and-push.outputs.image-ref }}
+          IMAGE="${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
           if [ -z "$IMAGE" ]; then
             echo "Image ref not set; skipping Trivy"
             exit 0
@@ -236,12 +236,12 @@ jobs:
 
   deploy:
     name: Deploy to AKS
-    needs: [image-scan, tests, build-and-push]   # 👈 FIX: added build-and-push here
+    needs: [image-scan, tests, build-and-push]
     runs-on: ubuntu-latest
     environment: production
     env:
-      IMAGE_TO_DEPLOY: ${{ needs.build-and-push.outputs.image-ref }}
-      K8S_MANIFEST_PATH: k8s/deployment.yaml
+      IMAGE_TO_DEPLOY: ${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+      K8S_MANIFEST_PATH: k8s/deployment.yaml  
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -264,10 +264,8 @@ jobs:
 
           echo "Replacing image and ensuring namespace in ${K8S_MANIFEST_PATH}"
 
-          # Replace IMAGE_PLACEHOLDER with actual image
           sed -i "s|IMAGE_PLACEHOLDER|${IMAGE}|g" "${K8S_MANIFEST_PATH}"
 
-          # If namespace already exists, update it; otherwise, inject it properly under metadata:
           if grep -q "namespace:" "${K8S_MANIFEST_PATH}"; then
             sed -i "s|namespace:.*|namespace: ${NAMESPACE}|g" "${K8S_MANIFEST_PATH}"
           else
@@ -305,10 +303,6 @@ jobs:
           kubectl rollout status deployment/infinion-weather-api -n ${NAMESPACE} --timeout=180s
           echo "✅ Deployment complete."
 
-
-
-
-
   notify:
     name: Notify success
     needs: [deploy]
@@ -317,5 +311,5 @@ jobs:
     steps:
       - name: Post success message
         run: |
-          IMAGE_TO_DEPLOY="${{ needs.build-and-push.outputs.image-ref }}"
+          IMAGE_TO_DEPLOY="${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
           echo "Deployment to AKS succeeded: ${IMAGE_TO_DEPLOY}"
