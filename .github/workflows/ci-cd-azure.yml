@@ -236,7 +236,7 @@ jobs:
 
   deploy:
     name: Deploy to AKS
-    needs: [image-scan, tests]
+    needs: [image-scan, tests, build-and-push]   # 👈 FIX: added build-and-push here
     runs-on: ubuntu-latest
     environment: production
     env:
@@ -304,6 +304,7 @@ jobs:
           echo "⏳ Waiting for rollout..."
           kubectl rollout status deployment/infinion-weather-api -n ${NAMESPACE} --timeout=180s
           echo "✅ Deployment complete."
+
 
 
 
