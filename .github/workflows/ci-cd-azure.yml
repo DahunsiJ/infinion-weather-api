@@ -58,14 +58,35 @@ jobs:
         with:
           dotnet-version: '7.0.x'
 
-      - name: Restore & Build
+      - name: Restore & Build (use solution if present)
         run: |
-          dotnet restore
-          dotnet build --configuration Release --no-restore
+          # Prefer explicit solution restore/build to avoid "more than one project" errors.
+          SOLUTION="devops-api.sln"
+          if [ -f "$SOLUTION" ]; then
+            echo "Restoring solution: $SOLUTION"
+            dotnet restore "$SOLUTION"
+            echo "Building solution: $SOLUTION"
+            dotnet build "$SOLUTION" --configuration Release --no-restore
+          else
+            echo "Solution $SOLUTION not found — restoring any .csproj files"
+            dotnet restore
+            dotnet build --configuration Release --no-restore
+          fi
 
-      - name: Run Unit Tests
+      - name: Run Unit Tests (if any test projects)
         run: |
-          dotnet test --no-build --verbosity normal
+          # find test projects by common naming conventions; skip if none
+          TEST_PROJS=$(git ls-files '**/*[Tt]est*.csproj' '**/*[Tt]ests*.csproj' || true)
+          if [ -z "$TEST_PROJS" ]; then
+            echo "No test projects found, skipping dotnet test."
+            exit 0
+          fi
+          echo "Found test projects:"
+          echo "$TEST_PROJS"
+          for proj in $TEST_PROJS; do
+            echo "Running tests for $proj"
+            dotnet test "$proj" --no-build --verbosity normal
+          done
 
   build-and-push:
     name: Build & push image
@@ -122,6 +143,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trivy image scan (fail on HIGH/CRITICAL)
+        # if your editor complains about this action, update the tag or ignore; GitHub will resolve it at runtime
         uses: aquasecurity/trivy-action@v0.6.0
         with:
           image-ref: ${{ needs.build-and-push.outputs.image-ref }}
@@ -144,7 +166,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     env:
-      # Use GitHub expression here to set a simple env var for the run block
+      # Avoid referencing workflow-level env via an expression here (keeps editor/linter calm)
       IMAGE_TO_DEPLOY: ${{ needs.build-and-push.outputs.image-ref }}
       K8S_MANIFEST_PATH: k8s/deployment.yaml
     steps:
