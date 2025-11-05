@@ -11,11 +11,11 @@ COPY *.csproj ./
 # Copy everything else (since your source files are in the repo root)
 COPY . ./
 
-# Restore dependencies (disable parallel to avoid race conditions on CI runners)
-RUN dotnet restore --disable-parallel
+# Explicitly restore this specific project
+RUN dotnet restore "InfinionDevOps.csproj" --disable-parallel
 
 # Build & publish (trim to reduce size; no single-file for easier debugging)
-RUN dotnet publish -c Release -o /app/publish --no-restore \
+RUN dotnet publish "InfinionDevOps.csproj" -c Release -o /app/publish --no-restore \
     -p:PublishTrimmed=true \
     -p:PublishSingleFile=false
 
@@ -39,5 +39,4 @@ EXPOSE 5167
 # Security: run as non-root
 USER appuser
 
-# Final entrypoint
 ENTRYPOINT ["dotnet", "InfinionDevOps.dll"]
