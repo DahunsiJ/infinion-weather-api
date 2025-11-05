@@ -54,21 +54,18 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Restore & Build (use solution if present)
+      - name: Restore & Build
         run: |
           SOLUTION="devops-api.sln"
           if [ -f "$SOLUTION" ]; then
-            echo "Restoring solution: $SOLUTION"
             dotnet restore "$SOLUTION"
-            echo "Building solution: $SOLUTION"
             dotnet build "$SOLUTION" --configuration Release --no-restore
           else
-            echo "Solution $SOLUTION not found — restoring any .csproj files"
             dotnet restore
             dotnet build --configuration Release --no-restore
           fi
 
-      - name: Run Unit Tests (if any test projects)
+      - name: Run Unit Tests
         run: |
           TEST_PROJS=$(git ls-files '**/*[Tt]est*.csproj' '**/*[Tt]ests*.csproj' || true)
           if [ -z "$TEST_PROJS" ]; then
@@ -76,7 +73,6 @@ jobs:
             exit 0
           fi
           for proj in $TEST_PROJS; do
-            echo "Running tests for $proj"
             dotnet test "$proj" --no-build --configuration Release --verbosity normal
           done
 
@@ -85,12 +81,12 @@ jobs:
     needs: [tests]
     runs-on: ubuntu-latest
     steps:
-      - name: Validate Sonar secrets (skip if missing)
+      - name: Validate Sonar secrets
         id: sonar-check
         run: |
           if [ -z "${{ secrets.SONAR_TOKEN }}" ] || [ -z "${{ secrets.SONAR_ORGANIZATION }}" ] || [ -z "${{ secrets.SONAR_PROJECT_KEY }}" ]; then
             echo "missing=true" >> $GITHUB_OUTPUT
-            echo "SONAR_TOKEN, SONAR_ORGANIZATION or SONAR_PROJECT_KEY missing - skipping SonarCloud."
+            echo "SonarCloud credentials missing - skipping analysis."
             exit 0
           fi
           echo "missing=false" >> $GITHUB_OUTPUT
@@ -98,30 +94,27 @@ jobs:
       - name: Checkout
         if: steps.sonar-check.outputs.missing == 'false'
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Setup Java 17 (SonarScanner requires modern Java)
+      - name: Setup Java (SonarScanner)
         if: steps.sonar-check.outputs.missing == 'false'
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup .NET (for C# analysis)
+      - name: Setup .NET
         if: steps.sonar-check.outputs.missing == 'false'
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
 
-      - name: Install dotnet-sonarscanner
+      - name: Install SonarScanner
         if: steps.sonar-check.outputs.missing == 'false'
         run: |
           dotnet tool install --global dotnet-sonarscanner --version 5.8.0 || true
           export PATH="$PATH:$HOME/.dotnet/tools"
-        shell: bash
 
-      - name: SonarScanner Begin
+      - name: Sonar Begin
         if: steps.sonar-check.outputs.missing == 'false'
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -132,9 +125,8 @@ jobs:
             /o:"${{ secrets.SONAR_ORGANIZATION }}" \
             /d:sonar.login="${SONAR_TOKEN}" \
             /d:sonar.host.url="https://sonarcloud.io"
-        shell: bash
 
-      - name: Build for Sonar analysis
+      - name: Build for Sonar
         if: steps.sonar-check.outputs.missing == 'false'
         run: |
           SOLUTION="devops-api.sln"
@@ -145,16 +137,14 @@ jobs:
               dotnet build "$proj" --configuration Release
             done
           fi
-        shell: bash
 
-      - name: SonarScanner End
+      - name: Sonar End
         if: steps.sonar-check.outputs.missing == 'false'
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           export PATH="$PATH:$HOME/.dotnet/tools"
           dotnet-sonarscanner end /d:sonar.login="${SONAR_TOKEN}"
-        shell: bash
 
   build-and-push:
     name: Build & push image
@@ -166,17 +156,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up QEMU and Buildx
+      - name: Setup QEMU and Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to ACR (Docker)
+      - name: Login to ACR
         uses: azure/docker-login@v1
         with:
           login-server: ${{ secrets.ACR_NAME }}.azurecr.io
           username: ${{ secrets.AZURE_CLIENT_ID }}
           password: ${{ secrets.AZURE_CLIENT_SECRET }}
 
-      - name: Build and push Docker image (no cache export)
+      - name: Build & push image
         id: build-image
         uses: docker/build-push-action@v5
         with:
@@ -193,15 +183,10 @@ jobs:
           IMAGE_REF="${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
           echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
 
-      - name: Generate SBOM with Syft (docker)
-        if: ${{ always() }}
+      - name: Generate SBOM
+        if: always()
         run: |
           IMAGE=${{ steps.set-image.outputs.image-ref }}
-          if [ -z "$IMAGE" ]; then
-            echo "Image ref not set; skipping SBOM generation"
-            exit 0
-          fi
-          echo "Generating SBOM for $IMAGE"
           docker run --rm -v "${GITHUB_WORKSPACE}":/workdir anchore/syft:latest packages "$IMAGE" -o json > sbom.json || true
 
       - name: Upload SBOM artifact
@@ -216,18 +201,19 @@ jobs:
     needs: [build-and-push]
     runs-on: ubuntu-latest
     steps:
-      - name: Run Trivy image scan (fail on HIGH/CRITICAL)
+      - name: Scan image with Trivy
         run: |
           IMAGE=${{ needs.build-and-push.outputs.image-ref }}
           if [ -z "$IMAGE" ]; then
-            echo "Image ref not set; skipping Trivy"
+            echo "No image to scan."
             exit 0
           fi
-          echo "Scanning ${IMAGE} with Trivy"
-          docker run --rm -v "${GITHUB_WORKSPACE}":/workdir aquasecurity/trivy:latest image --format json --output /workdir/trivy-report.json --exit-code 1 --severity CRITICAL,HIGH "$IMAGE"
+          docker run --rm -v "${GITHUB_WORKSPACE}":/workdir aquasecurity/trivy:latest image \
+            --format json --output /workdir/trivy-report.json \
+            --exit-code 1 --severity CRITICAL,HIGH "$IMAGE"
         continue-on-error: true
 
-      - name: Upload Trivy report as artifact
+      - name: Upload Trivy report
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -260,13 +246,13 @@ jobs:
           resource-group: ${{ secrets.RESOURCE_GROUP }}
           cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
 
-      - name: Replace image placeholder in manifest and show
+      - name: Replace image in manifest
         run: |
           IMAGE=${{ env.IMAGE_TO_DEPLOY }}
           sed -i "s|IMAGE_PLACEHOLDER|${IMAGE}|g" "${K8S_MANIFEST_PATH}"
           cat "${K8S_MANIFEST_PATH}"
 
-      - name: Deploy manifests to AKS
+      - name: Deploy manifests
         run: |
           kubectl apply -f k8s/namespace.yaml || true
           kubectl apply -f k8s/deployment.yaml
@@ -277,9 +263,7 @@ jobs:
     name: Notify success
     needs: [deploy]
     runs-on: ubuntu-latest
-    if: ${{ success() }}
+    if: success()
     steps:
       - name: Post success message
-        run: |
-          IMAGE_TO_DEPLOY="${{ needs.build-and-push.outputs.image-ref }}"
-          echo "Deployment to AKS succeeded: ${IMAGE_TO_DEPLOY}"
+        run: echo "✅ Deployment succeeded for image: ${{ needs.build-and-push.outputs.image-ref }}"
