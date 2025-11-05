@@ -14,8 +14,8 @@ env:
 
 permissions:
   contents: read
-  packages: write
   id-token: write
+  packages: write
 
 jobs:
   prep:
@@ -246,10 +246,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Azure Login (with Service Principal secret)
+      - name: Azure Login
         uses: azure/login@v1
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
 
       - name: Set AKS context
         uses: azure/aks-set-context@v2
