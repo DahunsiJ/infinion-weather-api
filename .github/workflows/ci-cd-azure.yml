@@ -49,16 +49,14 @@ jobs:
     needs:
       - prep
     runs-on: ubuntu-latest
-    # copy the secret into an env var and reference env.* in if conditions
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       SONAR_ORGANIZATION: ${{ secrets.SONAR_ORGANIZATION }}
       SONAR_PROJECT_KEY: ${{ secrets.SONAR_PROJECT_KEY }}
     steps:
-      - name: Skip Sonar step if SONAR_TOKEN not set
+      - name: Skip Sonar if token not set
         if: env.SONAR_TOKEN == ''
-        run: |
-          echo "SONAR_TOKEN not provided. Skipping SonarCloud analysis."
+        run: echo "SONAR_TOKEN not provided. Skipping SonarCloud analysis."
 
       - name: Checkout (for Sonar)
         if: env.SONAR_TOKEN != ''
@@ -66,19 +64,29 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Java 17 (required by SonarScanner)
+        if: env.SONAR_TOKEN != ''
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
       - name: Setup .NET (for Sonar)
         if: env.SONAR_TOKEN != ''
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '7.0.x'
 
-      - name: SonarCloud Scan
+      - name: Run SonarCloud scan (sonar-scanner wrapper)
         if: env.SONAR_TOKEN != ''
         uses: sonarsource/sonarcloud-github-action@v1
         with:
-          organization: ${{ env.SONAR_ORGANIZATION }}
-          projectKey: ${{ env.SONAR_PROJECT_KEY }}
-          token: ${{ env.SONAR_TOKEN }}
+          # The action supports 'args' - pass sonar properties here as -D... args.
+          args: >
+            -Dsonar.organization=${{ env.SONAR_ORGANIZATION }}
+            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
+            -Dsonar.login=${{ env.SONAR_TOKEN }}
+            -Dsonar.host.url=https://sonarcloud.io
 
   tests:
     name: Unit tests
@@ -96,7 +104,6 @@ jobs:
 
       - name: Restore & Build (use solution if present)
         run: |
-          # Prefer explicit solution restore/build to avoid "more than one project" errors.
           SOLUTION="devops-api.sln"
           if [ -f "$SOLUTION" ]; then
             echo "Restoring solution: $SOLUTION"
@@ -111,7 +118,6 @@ jobs:
 
       - name: Run Unit Tests (if any test projects)
         run: |
-          # find test projects by common naming conventions; skip if none
           TEST_PROJS=$(git ls-files '**/*[Tt]est*.csproj' '**/*[Tt]ests*.csproj' || true)
           if [ -z "$TEST_PROJS" ]; then
             echo "No test projects found, skipping dotnet test."
@@ -129,7 +135,7 @@ jobs:
     needs:
       - prep
       - tests
-      - sonar   # sonar job exists; its steps will be skipped if token not present
+      - sonar
     runs-on: ubuntu-latest
     outputs:
       image-ref: ${{ steps.set-image.outputs.image-ref }}
@@ -175,9 +181,11 @@ jobs:
           IMAGE_REF="${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
           echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
 
-      - name: Generate SBOM (Anchore SBOM Action)
-        uses: anchore/sbom-action@v0
+      - name: Generate SBOM (Syft action)
+        # Stable syft-based SBOM action
+        uses: anchore/syft-action@v0.8.0
         with:
+          image: ${{ steps.set-image.outputs.image-ref }}
           output: sbom.json
 
       - name: Upload SBOM artifact
@@ -198,7 +206,7 @@ jobs:
         with:
           image-ref: ${{ needs.build-and-push.outputs.image-ref }}
           format: 'table'
-          exit-code: '1'     # fail when HIGH or CRITICAL
+          exit-code: '1'
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
