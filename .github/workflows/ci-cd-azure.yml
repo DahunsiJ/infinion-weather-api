@@ -143,6 +143,10 @@ jobs:
       - tests
     runs-on: ubuntu-latest
     environment: production
+    env:
+      # Use GitHub expression here to set a simple env var for the run block
+      IMAGE_TO_DEPLOY: ${{ needs.build-and-push.outputs.image-ref }}
+      K8S_MANIFEST_PATH: ${{ env.K8S_MANIFEST }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -163,9 +167,9 @@ jobs:
 
       - name: Replace image placeholder in manifest
         run: |
-          IMAGE=${{ needs.build-and-push.outputs.image-ref }}
-          sed -i "s|IMAGE_PLACEHOLDER|${IMAGE}|g" ${{ env.K8S_MANIFEST }}
-          cat ${{ env.K8S_MANIFEST }}
+          echo "Replacing IMAGE_PLACEHOLDER with ${IMAGE_TO_DEPLOY} in ${K8S_MANIFEST_PATH}"
+          sed -i "s|IMAGE_PLACEHOLDER|${IMAGE_TO_DEPLOY}|g" "${K8S_MANIFEST_PATH}"
+          cat "${K8S_MANIFEST_PATH}"
 
       - name: Deploy manifests
         run: |
@@ -182,4 +186,6 @@ jobs:
     if: ${{ success() }}
     steps:
       - name: Post success message
-        run: echo "Deployment to AKS succeeded: ${{ needs.build-and-push.outputs.image-ref }}"
+        run: |
+          IMAGE_TO_DEPLOY="${{ needs.build-and-push.outputs.image-ref }}"
+          echo "Deployment to AKS succeeded: ${IMAGE_TO_DEPLOY}"
